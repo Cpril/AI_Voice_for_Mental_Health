@@ -1,0 +1,11 @@
+item_id,timepoint,construct,item,response_min,response_max,min_label,max_label,status
+clarity,pre,emotional_clarity,"Right now, I can identify and describe what I feel about this situation.",1,7,Strongly disagree,Strongly agree,Original exploratory item; not validated
+clarity,post,emotional_clarity,"Right now, I can identify and describe what I feel about this situation.",1,7,Strongly disagree,Strongly agree,Original exploratory item; not validated
+readiness,pre,communication_readiness,"If I choose to discuss this situation, I feel ready to explain what matters to me.",1,7,Strongly disagree,Strongly agree,Original exploratory item; not validated
+readiness,post,communication_readiness,"If I choose to discuss this situation, I feel ready to explain what matters to me.",1,7,Strongly disagree,Strongly agree,Original exploratory item; not validated
+distress,pre,immediate_distress,"How distressed do you feel about this situation right now?",0,10,Not at all,Extremely,Original exploratory item; not diagnostic
+distress,post,immediate_distress,"How distressed do you feel about this situation right now?",0,10,Not at all,Extremely,Original exploratory item; not diagnostic
+choice,post,perceived_choice,"I felt free to skip questions or disagree with the system.",1,7,Strongly disagree,Strongly agree,Original manipulation check; not validated
+guidance,post,perceived_guidance,"The instructions helped me know how to take part.",1,7,Strongly disagree,Strongly agree,Original manipulation check; not validated
+understanding,post,perceived_understanding,"The system's responses reflected what I meant.",1,7,Strongly disagree,Strongly agree,Original exploratory item; not validated
+fidelity,post,summary_fidelity,"The final record accurately represents what I chose to share.",1,7,Strongly disagree,Strongly agree,Original exploratory item; allow not applicable
