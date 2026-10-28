@@ -2,7 +2,7 @@
 
 ## Configuration
 
-Node.js 20+, a browser with WebRTC/microphone support, and localhost or HTTPS. Set OPENAI_API_KEY on the server through your existing environment or secret manager. No dependency installation is needed. Start with node server.mjs.
+Node.js 20.6+, a browser with WebRTC/microphone support, and localhost or HTTPS. Set OPENAI_API_KEY in the server-side `.env` file (see `.env.example`) or your existing environment. No dependency installation is needed. Start with `npm start`, which loads `.env`. Restart after changing settings.
 
 Optional settings: LIVE_MODEL (default gpt-live-1), LIVE_VOICE (default marin), API_MODEL (existing Analyzer, default gpt-4.1-2025-04-14). Text mode still follows CHAT_MODE. Voice is a paid API path regardless of CHAT_MODE. Model access must be available on the configured API account.
 

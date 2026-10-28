@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { SharedVoice } from '../public/voice.js';
-import { setMicrophone, closeMedia } from '../public/voice-utils.mjs';
+import { setMicrophone, closeMedia, VoiceFeedback } from '../public/voice-utils.mjs';
 function stream(name) {
   const track = { name, enabled: true, stopped: false, stop() { this.stopped = true; } };
   return { track, getAudioTracks: () => [track], getTracks: () => [track] };
@@ -55,4 +55,49 @@ test('host mixes only partner microphones into Live, sends Guide plus A to B, an
   state = { ...state, status: 'stopped' }; await client.sync(state);
   assert.equal(mic.track.stopped, true); assert.equal(client.connected, false);
   assert.equal(pcs.every(p => p.connectionState === 'closed'), true);
+});
+
+
+test('microphone feedback warns at three seconds and recovers when sound arrives', () => {
+  let now = 0; const feedback = new VoiceFeedback(() => now);
+  feedback.listen('one');
+  now = 2999; assert.equal(feedback.sample().warning, false);
+  now = 3000; assert.match(feedback.sample().message, /can’t hear you/);
+  now = 3100; const heard = feedback.sample(0.1);
+  assert.equal(heard.warning, false); assert.equal(heard.level, 40);
+  now = 6100; assert.match(feedback.sample(0.1).message, /no transcript/);
+  feedback.updateTranscript('Hello there');
+  assert.equal(feedback.sample(0.1).warning, false);
+  assert.equal(feedback.sample(0.1).transcript, 'Hello there');
+  now = 9100; assert.match(feedback.sample().message, /can’t hear you/);
+  feedback.finish(); assert.equal(feedback.sample().level, 0);
+  assert.equal(feedback.sample().warning, false);
+  feedback.listen('two'); assert.equal(feedback.sample().transcript, '');
+});
+
+test('AI response timeout is separate from microphone input and clears on reply or disconnect', () => {
+  let now = 0; const feedback = new VoiceFeedback(() => now);
+  feedback.waitForReply('Earlier output');
+  now = 3000; assert.match(feedback.sample().message, /AI hasn’t responded/);
+  feedback.receiveReply('Earlier output'); assert.equal(feedback.sample().warning, true);
+  feedback.receiveReply('Earlier output New words'); assert.equal(feedback.sample().warning, false);
+  feedback.waitForReply('x'); now = 6000; assert.equal(feedback.sample().warning, true);
+  feedback.reset(); assert.equal(feedback.sample().warning, false);
+  assert.equal(feedback.sample().recording, false);
+});
+
+
+test('review mutes immediately and stale recording state cannot re-enable the microphone', async () => {
+  const mic = stream('mic');
+  let rejectFinish;
+  const state = { experience: 'solo', status: 'active', voice: { generation: 'g', online: ['A'], commands: [], signals: [], turn: { id: 'turn', speaker: 'A', recording: true } } };
+  const client = new SharedVoice({ actor: 'A', state: () => state, audio: { pause() {} }, notice() {}, request: async () => new Promise((_, reject) => { rejectFinish = reject; }) });
+  client.connected = true; client.generation = 'g'; client.channel = { readyState: 'open' }; client.stream = mic; client.localRecordingTurn = 'turn';
+  const finish = client.finish();
+  assert.equal(mic.track.enabled, false);
+  await client.sync(state);
+  assert.equal(mic.track.enabled, false);
+  rejectFinish(Error('network interrupted'));
+  await assert.rejects(finish, /network interrupted/);
+  assert.equal(mic.track.enabled, false);
 });

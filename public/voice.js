@@ -1,14 +1,15 @@
-import { setMicrophone, closeMedia, gatherIce } from './voice-utils.mjs';
+import { setMicrophone, closeMedia, gatherIce, VoiceFeedback } from './voice-utils.mjs';
 
 // One shared Live call, hosted by A. Only human microphones feed the Live input.
 // The return mix to B contains A + Guide; the guide is never fed back to itself.
 export class SharedVoice {
-  constructor({ actor, request, state, audio, notice, dependencies = globalThis }) {
-    Object.assign(this, { actor, request, getState: state, audio, notice, dependencies });
+  constructor({ actor, request, state, audio, notice, feedback = () => {}, dependencies = globalThis }) {
+    Object.assign(this, { actor, request, getState: state, audio, notice, feedback, dependencies });
+    this.inputFeedback = new VoiceFeedback();
     this.connected = false; this.starting = false; this.serial = Promise.resolve(); this.epoch = 0;
     this.signalCursor = 0; this.commandCursor = 0;
   }
-  get ready() { return this.connected && this.partner?.connectionState === 'connected' && (this.actor !== 'A' || this.channel?.readyState === 'open'); }
+  get ready() { return this.connected && (this.getState().experience === 'solo' || this.partner?.connectionState === 'connected') && (this.actor !== 'A' || this.channel?.readyState === 'open'); }
   async start() {
     if (this.connected || this.starting) return;
     const initial = this.getState();
@@ -26,7 +27,8 @@ export class SharedVoice {
       if (epoch !== this.epoch) return;
       if (this.actor === 'A') {
         const AudioContextClass = this.dependencies.AudioContext || this.dependencies.webkitAudioContext;
-        this.context = new AudioContextClass(); await this.context.resume();
+        this.context = new AudioContextClass();
+        void this.context.resume().catch(() => this.notice('Select Start speaking to enable audio playback.'));
         if (epoch !== this.epoch) return;
         this.liveInput = this.context.createMediaStreamDestination();
         this.partnerOutput = this.context.createMediaStreamDestination();
@@ -57,7 +59,8 @@ export class SharedVoice {
         await this.live.setRemoteDescription({ type: 'answer', sdp: answer.sdp });
       }
       this.connected = true;
-      this.notice(this.actor === 'A' ? 'GPT-Live connecting. Waiting for both audio connections; microphone is off.' : 'Waiting for participant A to host GPT-Live; microphone is off.');
+      this.startMeter();
+      this.notice(initial.experience === 'solo' ? 'Connecting to AI; microphone is off.' : this.actor === 'A' ? 'GPT-Live connecting. Waiting for both audio connections; microphone is off.' : 'Waiting for participant A to host GPT-Live; microphone is off.');
     } catch (error) {
       await this.disconnect();
       if (error.name === 'NotAllowedError') throw Error('Microphone permission was denied. Allow access for this site and reconnect.');
@@ -75,7 +78,12 @@ export class SharedVoice {
     if (!this.connected || this.syncing) return;
     this.syncing = true;
     try {
-      setMicrophone(this.stream, Boolean(this.ready && s.voice.turn?.recording && s.voice.turn.speaker === this.actor));
+      const recording = Boolean(this.localRecordingTurn === s.voice.turn?.id && this.ready && s.voice.turn?.recording && s.voice.turn.speaker === this.actor);
+      setMicrophone(this.stream, recording);
+      if (recording) this.inputFeedback.listen(s.voice.turn.id);
+      else this.inputFeedback.finish();
+      if (s.voice.turn?.speaker === this.actor) this.inputFeedback.updateTranscript(s.voice.turn.text);
+      this.inputFeedback.receiveReply(s.voice.output);
       if (this.actor === 'A' && this.ready) for (const command of s.voice.commands) if (command.id > this.commandCursor && this.send(command)) this.commandCursor = command.id;
       if (this.actor === 'A' && s.voice.online.includes('B') && !this.partner) {
         this.makePartner();
@@ -94,6 +102,28 @@ export class SharedVoice {
       if (this.ready) this.notice(s.voice.turn?.recording ? (s.voice.turn.speaker === this.actor ? 'Microphone on · your turn' : 'Your partner is speaking · your microphone is off') : 'Voice connected · microphone off');
     } finally { this.syncing = false; }
   }
+  startMeter() {
+    const Context = this.dependencies.AudioContext || this.dependencies.webkitAudioContext;
+    if (!this.context && Context) this.context = new Context();
+    if (!this.context?.createAnalyser) return;
+    void this.context.resume();
+    this.analyser = this.context.createAnalyser();
+    this.analyser.fftSize = 512;
+    this.meterSource = this.context.createMediaStreamSource(this.stream);
+    this.meterSource.connect(this.analyser);
+    const samples = new Float32Array(this.analyser.fftSize);
+    this.meterTimer = setInterval(() => {
+      this.analyser.getFloatTimeDomainData(samples);
+      const rms = Math.sqrt(samples.reduce((sum, x) => sum + x * x, 0) / samples.length);
+      this.feedback(this.inputFeedback.sample(rms));
+    }, 100);
+  }
+  stopMeter() {
+    clearInterval(this.meterTimer); this.meterTimer = null;
+    this.meterSource?.disconnect(); this.meterSource = this.analyser = null;
+    this.inputFeedback.reset(); this.feedback(this.inputFeedback.sample());
+  }
+  waitForReply() { this.inputFeedback.waitForReply(this.getState().voice.output); }
   makePartner() {
     if (this.partner) return;
     this.partner = new this.dependencies.RTCPeerConnection({ iceServers: [] });
@@ -112,13 +142,30 @@ export class SharedVoice {
   }
   async begin() {
     if (!this.ready) throw Error('Wait for both partners to connect voice. Participant A must keep their tab open.');
-    const result = await this.request('begin', {}); setMicrophone(this.stream, true); return result;
+    const epoch = this.epoch;
+    if (this.context) await this.context.resume();
+    const result = await this.request('begin', {});
+    if (epoch !== this.epoch || this.dependencies.document?.hidden) {
+      this.mute();
+      return this.request('finish', { turnId: result.voice.turn.id });
+    }
+    this.localRecordingTurn = result.voice.turn.id;
+    this.inputFeedback.listen(result.voice.turn.id);
+    setMicrophone(this.stream, true); return result;
+  }
+  mute() {
+    this.localRecordingTurn = null;
+    this.inputFeedback.finish();
+    setMicrophone(this.stream, false);
+    this.feedback(this.inputFeedback.sample());
   }
   async finish() {
-    setMicrophone(this.stream, false);
+    this.mute();
     return this.request('finish', { turnId: this.getState().voice.turn.id });
   }
   async disconnect(message = 'Microphone off.') {
+    this.mute();
+    this.stopMeter();
     ++this.epoch; this.connected = false;
     const generation = this.generation;
     const live = this.live, partner = this.partner;
@@ -130,6 +177,8 @@ export class SharedVoice {
     this.generation = null;
   }
   closeImmediately() {
+    this.mute();
+    this.stopMeter();
     ++this.epoch;
     closeMedia({ stream: this.stream, connections: [this.live, this.partner], context: this.context, audio: this.audio });
     this.connected = false;

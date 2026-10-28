@@ -189,3 +189,187 @@ test('voice: discarding a turn redacts its draft text in exports', async t => {
   assert.equal(JSON.stringify(exported).includes('discard this fictional phrase'), false);
   assert.equal(exported.events.find(e => e.live_event_id === 'discard_event').redacted, true);
 });
+
+
+test('solo: one token, immediate start, automatic AI reply and one-person completion', async t => {
+  const prompts = [];
+  const { call } = await fixture(t, { mode: 'openai', key: 'test-key', fetchImpl: async (_url, options) => {
+    prompts.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'A supportive response.' } }] }) };
+  } });
+  const { data: room } = await call('create', { experience: 'solo' });
+  assert.deepEqual(Object.keys(room.participants), ['A']);
+  const token = room.participants.A;
+  const joined = await call('join', { consent: true }, token);
+  assert.equal(joined.data.status, 'active');
+  assert.equal(joined.data.experience, 'solo');
+  const reply = await call('message', { text: 'I enjoyed a walk.', phase: 'rapport' }, token);
+  assert.equal(reply.status, 200);
+  assert.equal(reply.data.events.at(-1).text, 'A supportive response.');
+  assert.match(prompts[0].messages[0].content, /one participant/);
+  for (const phase of SEQUENCES.SOLO) {
+    const result = await call('ready', { phase, skip: true }, token);
+    assert.equal(result.status, 200);
+  }
+  const exported = (await call('export', {}, room.adminToken)).data;
+  assert.equal(exported.status, 'completed');
+  assert.equal(exported.participant_count, 1);
+  assert.equal(exported.experience, 'solo');
+});
+
+test('duo experience retains PS and waits for both participants', async t => {
+  const { call } = await fixture(t);
+  const { data: room } = await call('create', { experience: 'duo' });
+  assert.equal(room.condition, 'PS');
+  assert.equal((await call('join', { consent: true }, room.participants.A)).data.status, 'waiting');
+  assert.equal((await call('join', { consent: true }, room.participants.B)).data.status, 'active');
+});
+
+test('solo voice starts a speaking turn without B', async t => {
+  const { call } = await fixture(t, { key: 'test-key', fetchImpl: async () => ({ ok: true, json: async () => ({ session: { id: 'solo-session' }, transport: { sdp: 'v=0\r\n' } }) }) });
+  const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
+  const token = room.participants.A;
+  const { data: state } = await call('join', { consent: true }, token);
+  const common = { phase: state.phase, generation: state.voice.generation };
+  await call('voice/join', common, token);
+  assert.equal((await call('voice/start', { ...common, sdp: 'v=0' }, token)).status, 200);
+  const turn = await call('voice/begin', common, token);
+  assert.equal(turn.status, 200);
+  assert.equal(turn.data.voice.turn.speaker, 'A');
+  const turnId = turn.data.voice.turn.id;
+  await call('voice/finish', { ...common, turnId }, token);
+  const shared = await call('voice/share', { ...common, turnId, text: 'A good day.' }, token);
+  assert.equal(shared.status, 200);
+  assert.equal(shared.data.voice.commands.at(-1).type, 'session.commentary.append');
+});
+
+
+test('voice: all spoken AI replies stream into message history and export without duplicate deltas', async t => {
+  const { voiceCall, current, call, room } = await voiceFixture(t, 'PS');
+  await voiceCall('start', 'A', { sdp: 'v=0 offer' });
+  const output = async (id, text) => voiceCall('event', 'A', { sessionId: 'live_test', event: { type: 'session.output_transcript.delta', event_id: id, delta: text, start_ms: 10, end_ms: 20 } });
+  await output('q1', 'Welcome');
+  const initial = await current();
+  const count = initial.events.length;
+  await output('q2', ' to this conversation.');
+  const streamed = await current();
+  assert.equal(streamed.events.length, count);
+  assert.equal(streamed.events.find(e => e.source === 'voice' && e.actor === 'Guide').text, 'Welcome to this conversation.');
+  await output('q2', ' to this conversation.');
+  const turn = (await voiceCall('begin', 'A')).data.voice.turn;
+  await voiceCall('finish', 'A', { turnId: turn.id });
+  const share = await voiceCall('share', 'A', { turnId: turn.id, text: 'I enjoyed a walk.' });
+  assert.equal(share.data.voice.commands.at(-1).type, 'session.commentary.append');
+  await output('reply1', 'That sounds ');
+  await output('reply2', 'enjoyable.');
+  await call('message', { text: 'I also saw a friend.', phase: 'rapport' }, room.participants.A);
+  await output('reply3', 'What did you enjoy about that?');
+  const history = (await current()).events.filter(e => e.actor === 'Guide' && e.source === 'voice');
+  assert.deepEqual(history.map(e => e.text), ['Welcome to this conversation.', 'That sounds enjoyable.', 'What did you enjoy about that?']);
+  const exported = (await call('export', {}, room.adminToken)).data;
+  assert.equal(exported.events.filter(e => e.type === 'message' && e.actor === 'Guide' && e.source === 'voice').length, 3);
+});
+
+
+test('conversational rooms introduce the guide and change topics for natural refusals', async t => {
+  const { call } = await fixture(t);
+  const { data: room } = await call('create', { experience: 'solo' });
+  const token = room.participants.A;
+  const initial = (await call('join', { consent: true }, token)).data;
+  assert.match(initial.events[0].text, /AI conversation guide/);
+  assert.match(initial.events[0].text, /pass on any question/);
+  for (const refusal of ["I don't want to answer this", 'Can we talk about something else?', 'Please skip this question']) {
+    const current = (await call('state', undefined, token)).data;
+    const changed = await call('message', { text: refusal, phase: current.phase }, token);
+    assert.equal(changed.status, 200);
+    assert.match(changed.data.events.at(-1).text, /something else/);
+    assert.notEqual(changed.data.events.at(-1).text, current.events.at(-1).text);
+  }
+});
+
+test('voice intro includes the refusal notice, and approved refusals queue a different question', async t => {
+  const { call } = await fixture(t, { key: 'test', fetchImpl: async () => ({ ok: true, json: async () => ({ session: { id: 'intro_session' }, transport: { sdp: 'v=0 answer' } }) }) });
+  const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
+  const token = room.participants.A;
+  const initial = (await call('join', { consent: true }, token)).data;
+  const common = { phase: initial.phase, generation: initial.voice.generation };
+  await call('voice/join', common, token);
+  await call('voice/start', { ...common, sdp: 'v=0' }, token);
+  const started = (await call('state', undefined, token)).data;
+  assert.match(started.voice.commands.at(-1).content, /AI conversation guide/);
+  assert.match(started.voice.commands.at(-1).content, /pass on any question/);
+  const turn = (await call('voice/begin', common, token)).data.voice.turn;
+  await call('voice/finish', { ...common, turnId: turn.id }, token);
+  const changed = (await call('voice/share', { ...common, turnId: turn.id, text: "I'd rather not answer this. Let's change the topic." }, token)).data;
+  assert.equal(changed.phase, 'AQ');
+  assert.match(changed.voice.commands.at(-1).content, /different question/);
+  assert.match(changed.voice.commands.at(-1).content, /small thing/);
+});
+
+test('stop immediately closes voice, summarizes only approved messages, and reuses the summary', async t => {
+  let release, summaryCalls = 0, sentMessages;
+  const { call } = await fixture(t, { mode: 'openai', key: 'test', fetchImpl: async (url, options) => {
+    if (url.includes('/live/')) return { ok: true, json: async () => ({ session: { id: 'summary_session' }, transport: { sdp: 'v=0 answer' } }) };
+    summaryCalls++; sentMessages = JSON.parse(options.body).messages;
+    await new Promise(resolve => { release = resolve; });
+    return { ok: true, json: async () => ({ choices: [{ message: { content: 'You enjoyed a walk and felt relaxed.' } }] }) };
+  } });
+  const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
+  const token = room.participants.A;
+  const initial = (await call('join', { consent: true }, token)).data;
+  const common = { phase: initial.phase, generation: initial.voice.generation };
+  await call('voice/join', common, token); await call('voice/start', { ...common, sdp: 'v=0' }, token);
+  await call('message', { text: 'I enjoyed a walk and felt relaxed.', phase: initial.phase }, token);
+  await call('voice/begin', common, token);
+  await call('voice/event', { ...common, sessionId: 'summary_session', event: { type: 'session.input_transcript.delta', event_id: 'unsent', delta: 'unapproved private draft', start_ms: 1, end_ms: 2 } }, token);
+  const stopping = call('stop', {}, token);
+  for (let i = 0; i < 50 && !release; i++) await new Promise(r => setTimeout(r, 10));
+  const during = (await call('state', undefined, token)).data;
+  assert.equal(during.status, 'stopped'); assert.equal(during.voice.connected, false);
+  assert.equal(during.summaryStatus, 'generating');
+  assert.doesNotMatch(sentMessages[1].content, /unapproved private draft/);
+  assert.match(sentMessages[1].content, /enjoyed a walk/);
+  release();
+  const stopped = (await stopping).data;
+  assert.equal(stopped.summaryStatus, 'complete');
+  assert.match(stopped.finalSummary, /felt relaxed/);
+  await call('stop', {}, token); assert.equal(summaryCalls, 1);
+  const exported = (await call('export', {}, room.adminToken)).data;
+  assert.equal(exported.final_summary, stopped.finalSummary);
+});
+
+test('summary failures return a labeled recap and leave the session stopped', async t => {
+  let fail = false;
+  const { call } = await fixture(t, { mode: 'openai', key: 'test', fetchImpl: async () => fail ? { ok: false, status: 503 } : { ok: true, json: async () => ({ choices: [{ message: { content: 'A reply.' } }] }) } });
+  const { data: room } = await call('create', { experience: 'solo' });
+  const token = room.participants.A;
+  await call('join', { consent: true }, token);
+  await call('message', { text: 'I enjoyed a walk.', phase: 'rapport' }, token);
+  fail = true;
+  const result = (await call('stop', {}, token)).data;
+  assert.equal(result.status, 'stopped'); assert.equal(result.summaryStatus, 'fallback');
+  assert.match(result.finalSummary, /unavailable/); assert.match(result.finalSummary, /I enjoyed a walk/);
+});
+
+
+test('voice and text use the same concise mental health support system prompt', async t => {
+  const { SUPPORT_SYSTEM_PROMPT } = await import('../conversation.mjs');
+  const captured = [];
+  const { call } = await fixture(t, { mode: 'openai', key: 'test', fetchImpl: async (url, options) => {
+    captured.push(JSON.parse(options.body));
+    return { ok: true, json: async () => url.includes('/live/') ? { session: { id: 'prompt_session' }, transport: { sdp: 'v=0 answer' } } : { choices: [{ message: { content: 'Thank you for sharing.' } }] } };
+  } });
+  const textRoom = (await call('create', { experience: 'solo' })).data;
+  await call('join', { consent: true }, textRoom.participants.A);
+  await call('message', { text: 'I feel tired today.', phase: 'rapport' }, textRoom.participants.A);
+  assert.ok(captured[0].messages[0].content.startsWith(SUPPORT_SYSTEM_PROMPT));
+  const voiceRoom = (await call('create', { experience: 'duo', modality: 'voice' })).data;
+  await call('join', { consent: true }, voiceRoom.participants.A);
+  const joined = (await call('join', { consent: true }, voiceRoom.participants.B)).data;
+  const common = { phase: joined.phase, generation: joined.voice.generation };
+  await call('voice/join', common, voiceRoom.participants.A);
+  await call('voice/start', { ...common, sdp: 'v=0' }, voiceRoom.participants.A);
+  assert.ok(captured[1].session.instructions.startsWith(SUPPORT_SYSTEM_PROMPT));
+  assert.match(captured[1].session.instructions, /two participants A and B/);
+  assert.match(captured[1].session.instructions, /Remain silent during speaking/);
+});
