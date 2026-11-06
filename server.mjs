@@ -128,22 +128,24 @@ export function createApp({ mode = process.env.CHAT_MODE || 'demo', key = proces
       let body; try { body = JSON.parse(raw || '{}'); } catch { throw bad('Invalid JSON'); }
       if (url.pathname === '/api/create') {
         if (rooms.size >= 100) throw bad('Local room limit reached', 429);
-        const modality = body.modality || 'text';
-        if (!['text', 'voice'].includes(modality)) throw bad('Unknown conversation mode');
+        // 'live' is solo voice with open-mic turn-taking; it is stored as voice modality with a live flag.
+        if (!['text', 'voice', 'live'].includes(body.modality || 'text')) throw bad('Unknown conversation mode');
         if (body.experience && !['solo', 'duo'].includes(body.experience)) throw bad('Unknown experience');
+        const live = body.modality === 'live', modality = live ? 'voice' : body.modality || 'text';
+        if (live && body.experience !== 'solo') throw bad('Live voice is available for the solo conversation only');
         const choice = body.experience === 'solo' ? 'SOLO' : body.experience === 'duo' ? 'PS' : body.condition || 'random';
         if (choice !== 'random' && !SEQUENCES[choice]) throw bad('Unknown condition');
         const id = randomBytes(6).toString('hex');
-        const r = { id, modality, conversational: Boolean(body.experience), topicIndex: -1, finalSummary: null, summaryStatus: null, voice: modality === 'voice' ? createVoiceRoom() : null, admin: token(), tokens: choice === 'SOLO' ? { A: token() } : { A: token(), B: token() }, condition: choice === 'random' ? assign() : choice,
+        const r = { id, modality, live, conversational: Boolean(body.experience), topicIndex: -1, finalSummary: null, summaryStatus: null, voice: modality === 'voice' ? createVoiceRoom() : null, admin: token(), tokens: choice === 'SOLO' ? { A: token() } : { A: token(), B: token() }, condition: choice === 'random' ? assign() : choice,
           allocation: choice === 'random' ? 'shuffled-block-of-three' : 'manual-demo', created: new Date().toISOString(), status: 'waiting',
           phase: null, index: -1, joined: [], ready: [], responded: [], events: [], summaries: [], surveys: [], busy: false, abort: new AbortController() };
-        rooms.set(id, r); log(r, 'created', 'Researcher', { condition: r.condition, allocation: r.allocation, version: VERSION, modality });
-        respond(201, { room: id, adminToken: r.admin, participants: r.tokens, condition: r.condition, experience: r.condition === 'SOLO' ? 'solo' : 'duo', modality, voiceAvailable: Boolean(key), mode }); return;
+        rooms.set(id, r); log(r, 'created', 'Researcher', { condition: r.condition, allocation: r.allocation, version: VERSION, modality, live });
+        respond(201, { room: id, adminToken: r.admin, participants: r.tokens, condition: r.condition, experience: r.condition === 'SOLO' ? 'solo' : 'duo', modality, live, voiceAvailable: Boolean(key), mode }); return;
       }
       const { r, actor } = auth(req);
       if (url.pathname === '/api/export') {
         if (actor !== 'Researcher') throw bad('Researcher only', 403);
-        respond(200, { schema_version: 3, experience: r.condition === 'SOLO' ? 'solo' : 'duo', participant_count: Object.keys(r.tokens).length, modality: r.modality, live_model: r.modality === 'voice' ? liveModel : null, live_voice: r.modality === 'voice' ? liveVoice : null, prompt_version: VERSION, id: r.id, condition: r.condition, allocation: r.allocation,
+        respond(200, { schema_version: 3, experience: r.condition === 'SOLO' ? 'solo' : 'duo', participant_count: Object.keys(r.tokens).length, modality: r.modality, live_voice_conversation: r.live, live_model: r.modality === 'voice' ? liveModel : null, live_voice: r.modality === 'voice' ? liveVoice : null, prompt_version: VERSION, id: r.id, condition: r.condition, allocation: r.allocation,
           mode, model: mode === 'openai' ? model : null, created: r.created, status: r.status, final_summary: r.finalSummary, summary_status: r.summaryStatus, conversational: r.conversational, events: r.events, summaries: r.summaries, surveys: r.surveys }); return;
       }
       if (url.pathname === '/api/delete') {

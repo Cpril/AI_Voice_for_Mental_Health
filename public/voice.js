@@ -15,7 +15,7 @@ export class SharedVoice {
     const initial = this.getState();
     if (!initial.voiceAvailable) throw Error('Set OPENAI_API_KEY on the server, then restart it to enable GPT-Live.');
     if (!this.dependencies.navigator?.mediaDevices?.getUserMedia || !this.dependencies.RTCPeerConnection) throw Error('Voice needs a browser with microphone and WebRTC support on localhost or HTTPS.');
-    this.starting = true;
+    this.starting = true; this.liveMuted = false;
     const epoch = ++this.epoch;
     this.generation = initial.voice.generation; this.signalCursor = 0; this.commandCursor = initial.voice.commands.at(-1)?.id || 0;
     try {
@@ -78,11 +78,13 @@ export class SharedVoice {
     if (!this.connected || this.syncing) return;
     this.syncing = true;
     try {
-      const recording = Boolean(this.localRecordingTurn === s.voice.turn?.id && this.ready && s.voice.turn?.recording && s.voice.turn.speaker === this.actor);
+      this.inputFeedback.live = Boolean(s.voice.live);
+      const recording = s.voice.live ? Boolean(this.ready && !this.liveMuted) : Boolean(this.localRecordingTurn === s.voice.turn?.id && this.ready && s.voice.turn?.recording && s.voice.turn.speaker === this.actor);
       setMicrophone(this.stream, recording);
-      if (recording) this.inputFeedback.listen(s.voice.turn.id);
+      if (recording) this.inputFeedback.listen(s.voice.live ? 'live' : s.voice.turn.id);
       else this.inputFeedback.finish();
-      if (s.voice.turn?.speaker === this.actor) this.inputFeedback.updateTranscript(s.voice.turn.text);
+      if (s.voice.live) this.inputFeedback.updateTranscript(s.events?.findLast(e => e.type === 'message' && e.actor === this.actor && e.source === 'voice_live')?.text);
+      else if (s.voice.turn?.speaker === this.actor) this.inputFeedback.updateTranscript(s.voice.turn.text);
       this.inputFeedback.receiveReply(s.voice.output);
       if (this.actor === 'A' && this.ready) for (const command of s.voice.commands) if (command.id > this.commandCursor && this.send(command)) this.commandCursor = command.id;
       if (this.actor === 'A' && s.voice.online.includes('B') && !this.partner) {
@@ -99,7 +101,8 @@ export class SharedVoice {
         } else if (signal.type === 'answer' && this.actor === 'A' && this.partner) await this.partner.setRemoteDescription({ type: 'answer', sdp: signal.sdp });
         this.signalCursor = signal.id;
       }
-      if (this.ready) this.notice(s.voice.turn?.recording ? (s.voice.turn.speaker === this.actor ? 'Microphone on · your turn' : 'Your partner is speaking · your microphone is off') : 'Voice connected · microphone off');
+      if (this.ready && s.voice.live) this.notice(this.liveMuted ? 'Microphone muted · select Unmute to keep talking' : 'Live conversation · just talk, and interrupt anytime');
+      else if (this.ready) this.notice(s.voice.turn?.recording ? (s.voice.turn.speaker === this.actor ? 'Microphone on · your turn' : 'Your partner is speaking · your microphone is off') : 'Voice connected · microphone off');
     } finally { this.syncing = false; }
   }
   startMeter() {
@@ -153,7 +156,13 @@ export class SharedVoice {
     this.inputFeedback.listen(result.voice.turn.id);
     setMicrophone(this.stream, true); return result;
   }
+  toggleLiveMute() {
+    this.liveMuted = !this.liveMuted;
+    if (this.liveMuted) this.mute();
+    else if (this.context) void this.context.resume();
+  }
   mute() {
+    this.liveMuted = true;
     this.localRecordingTurn = null;
     this.inputFeedback.finish();
     setMicrophone(this.stream, false);
