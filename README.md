@@ -29,7 +29,7 @@ Requires **Node.js 20.6 or later** and a browser with microphone/WebRTC support.
 ```dotenv
 OPENAI_API_KEY=your-api-key-here
 CHAT_MODE=openai
-API_MODEL=gpt-4.1-2025-04-14
+API_MODEL=gpt-5.5-2026-04-23
 LIVE_MODEL=gpt-live-1
 LIVE_VOICE=marin
 PORT=8787
