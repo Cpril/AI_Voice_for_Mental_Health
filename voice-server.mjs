@@ -6,9 +6,9 @@ export function createVoiceRoom() {
   return { generation: randomBytes(12).toString('hex'), online: [], connected: false, connecting: false, sessionId: null,
     signals: { A: [], B: [] }, signalId: 0, commands: [], commandId: 0, outputMessageId: null, questionMessageId: null, inputMessageId: null, eventIds: new Set(), turn: null, output: '' };
 }
-// Solo conversations use GPT-Live's native full-duplex turn-taking: the microphone stays open and
+// Live solo rooms use GPT-Live's native full-duplex turn-taking: the microphone stays open and
 // speech is recorded as it arrives, without exclusive turns or transcript review.
-export function isLiveConversation(r) { return Boolean(r.voice && r.conversational && r.condition === 'SOLO'); }
+export function isLiveConversation(r) { return Boolean(r.voice && r.live && r.conversational && r.condition === 'SOLO'); }
 const LIVE_POLICY = ' This is a natural, real-time spoken conversation and the microphone stays open. There is no transcript review; ignore any instruction about application turn-taking or transcript-review controls. ' +
   'Turn-taking policy: Keep listening while the user pauses to think; respond when they finish a thought. Do not wait for an application request before speaking. ' +
   'Interruption policy: Stop speaking and listen when the user interrupts. ' +

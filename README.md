@@ -45,9 +45,11 @@ HOST=127.0.0.1
 
 ## Voice conversation flow
 
-**Solo voice is a live conversation.** After connecting, the microphone stays on and GPT-Live handles turn-taking itself: talk naturally, pause, or interrupt the AI at any time. Speech and AI replies are added to the conversation history as they arrive, with no transcript review, so the stop summary uses these live transcripts. Use **Mute microphone** for privacy; hiding the tab also mutes, and returning does not unmute. The live AI uses `SUPPORT_SYSTEM_PROMPT` plus the spoken-conversation policy in `voice-server.mjs`.
+Room setup offers three conversation modes: **Text chat**, **Voice messages** (record, review the transcript, then send; solo or two-person), and **Live voice** (solo only).
 
-The turn-based flow below applies to **two-person voice**, where exclusive speaking turns keep A and B correctly attributed.
+**Live voice** is a natural real-time conversation. After connecting, the microphone stays on and GPT-Live handles turn-taking itself: talk naturally, pause, or interrupt the AI at any time. Speech and AI replies are added to the conversation history as they arrive, with no transcript review, so the stop summary uses these live transcripts. Use **Mute microphone** for privacy; hiding the tab also mutes, and returning does not unmute. The live AI uses `SUPPORT_SYSTEM_PROMPT` plus the spoken-conversation policy in `voice-server.mjs`.
+
+The turn-based flow below applies to **Voice messages**, solo or two-person. Two-person voice always uses it, because exclusive speaking turns keep A and B correctly attributed.
 
 When a key is configured, room setup defaults to voice. After the room becomes active, voice connects automatically and requests browser microphone permission. **The microphone starts muted.** If the browser blocks connection or permission, use **Reconnect voice** and check the site permissions.
 

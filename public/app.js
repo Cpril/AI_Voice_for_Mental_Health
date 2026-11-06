@@ -9,10 +9,11 @@ async function api(path, body) {
   const result = await response.json(); if (!response.ok) throw Error(result.error); return result;
 }
 async function run(fn) { $('error').textContent = ''; try { await fn(); } catch (e) { $('error').textContent = e.message; } }
+function modeLabel(s) { return s.modality === 'voice' ? (s.live || s.voice?.live ? 'Live voice · GPT-Live' : 'Voice messages · GPT-Live') : s.mode === 'demo' ? 'Scripted demo · no AI calls' : 'Text · OpenAI'; }
 function participantLink(token, participant) { return location.origin + '/#' + new URLSearchParams({ token, actor: participant }); }
 function links(data) {
   $('setup').hidden = true; $('researcher').hidden = false;
-  $('assignment').textContent = `${data.experience === 'solo' ? 'Condition 1 · Solo + AI' : 'Condition 2 · Two participants + AI'} · ${data.modality === 'voice' ? 'Voice · GPT-Live' : data.mode === 'demo' ? 'Text · scripted demo' : 'Text · OpenAI'}`;
+  $('assignment').textContent = `${data.experience === 'solo' ? 'Condition 1 · Solo + AI' : 'Condition 2 · Two participants + AI'} · ${modeLabel(data)}`;
   $('links').replaceChildren();
   for (const [a, t] of Object.entries(data.participants)) { const link = document.createElement('a'); link.href = participantLink(t, a); link.target = '_blank'; link.rel = 'noreferrer'; link.textContent = 'Open participant ' + a; $('links').append(link); }
 }
@@ -62,7 +63,7 @@ function renderVoice(s) {
 function render(s) {
   state = s;
   renderVoice(s);
-  $('mode').textContent = s.modality === 'voice' ? 'Voice · GPT-Live' : s.mode === 'demo' ? 'Scripted demo · no AI calls' : 'OpenAI · ' + s.model;
+  $('mode').textContent = s.modality === 'voice' ? modeLabel(s) : s.mode === 'demo' ? 'Scripted demo · no AI calls' : 'OpenAI · ' + s.model;
   $('conversation').hidden = false; $('join').hidden = true;
   $('phase').textContent = `PARTICIPANT ${s.actor} · ${s.phase || 'WAITING'}`;
   $('title').textContent = s.title; $('status').textContent = s.status;
@@ -90,7 +91,13 @@ function render(s) {
   $('waiting').textContent = s.busy ? 'Guide is processing…' : s.status === 'waiting' ? 'Waiting for the other partner to join.' : s.status === 'completed' ? 'Conversation complete. Thank you.' : '';
 }
 function poll() { clearInterval(polling); polling = setInterval(() => run(async () => render(await api('state'))), 1500); }
-$('create').onclick = () => run(async () => { const data = await api('create', { experience: $('condition').value, modality: $('modality').value }); credential = data.adminToken; actor = 'Researcher'; location.hash = new URLSearchParams({ token: credential, actor }); links(data); $('mode').textContent = data.modality === 'voice' ? 'Voice · GPT-Live' : data.mode === 'demo' ? 'Scripted demo · no AI calls' : 'OpenAI mode'; });
+$('create').onclick = () => run(async () => { const data = await api('create', { experience: $('condition').value, modality: $('modality').value }); credential = data.adminToken; actor = 'Researcher'; location.hash = new URLSearchParams({ token: credential, actor }); links(data); $('mode').textContent = data.modality === 'voice' ? modeLabel(data) : data.mode === 'demo' ? 'Scripted demo · no AI calls' : 'OpenAI mode'; });
+function syncModeOptions() {
+  const live = $('modality').querySelector('option[value="live"]');
+  live.disabled = $('condition').value !== 'solo' || !$('modality').querySelector('option[value="voice"]').dataset.available;
+  if (live.disabled && $('modality').value === 'live') $('modality').value = 'voice';
+}
+$('condition').onchange = syncModeOptions;
 $('enter').onclick = () => run(async () => { if (!$('consent').checked) throw Error('Please acknowledge the demo instructions.'); render(await api('join', { consent: true })); poll(); });
 $('send').onclick = () => run(async () => {
   if (sending) return;
@@ -116,7 +123,7 @@ for (const action of ['guide', 'pause', 'stop']) $(action).onclick = () => run(a
   if (action === 'stop') { $('stop').disabled = true; $('session-summary').hidden = false; $('summary-text').textContent = 'Preparing your discussion summary…'; } const route = action === 'pause' && state.status === 'paused' ? 'resume' : action; render(await api(route, { phase: state.phase })); });
 $('export').onclick = () => run(async () => { const data = await api('export', {}); const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })); const link = document.createElement('a'); link.href = url; link.download = `dyad-${data.id}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); });
 $('delete').onclick = () => run(async () => { if (!confirm('Permanently remove this room from server memory? Exported files will remain.')) return; await api('delete', {}); location.href = '/'; });
-if (credential) run(async () => { const s = await api('state'); actor = s.actor; $('setup').hidden = true; if (s.actor === 'Researcher') { links(s); } else if (s.joined.includes(s.actor)) { render(s); poll(); } else { $('join').hidden = false; if (s.experience === 'solo') $('join-description').textContent = 'This is your individual conversation with the AI. Share only what feels comfortable. You can ask to change the topic, pause, or stop at any time.'; $('mode').textContent = s.modality === 'voice' ? 'Voice · GPT-Live' : s.mode; $('processing').textContent = s.modality === 'voice' ? 'When you connect voice and turn on the microphone, audio is sent to OpenAI and heard by your partner. Reviewed text and reported transcript fragments appear in research exports. No raw audio is saved by this app.' : s.mode === 'demo' ? 'Messages stay in local server memory. The guide is scripted, not an LLM.' : 'In OpenAI mode, disclosures are sent to OpenAI for support and phase summaries. Do not use real sensitive information in this demo.'; } });
+if (credential) run(async () => { const s = await api('state'); actor = s.actor; $('setup').hidden = true; if (s.actor === 'Researcher') { links(s); } else if (s.joined.includes(s.actor)) { render(s); poll(); } else { $('join').hidden = false; if (s.experience === 'solo') $('join-description').textContent = 'This is your individual conversation with the AI. Share only what feels comfortable. You can ask to change the topic, pause, or stop at any time.'; $('mode').textContent = s.modality === 'voice' ? modeLabel(s) : s.mode; $('processing').textContent = s.modality === 'voice' ? 'When you connect voice and turn on the microphone, audio is sent to OpenAI and heard by your partner. Reviewed text and reported transcript fragments appear in research exports. No raw audio is saved by this app.' : s.mode === 'demo' ? 'Messages stay in local server memory. The guide is scripted, not an LLM.' : 'In OpenAI mode, disclosures are sent to OpenAI for support and phase summaries. Do not use real sensitive information in this demo.'; } });
 
 $('voice-connect').onclick = () => run(connectVoice);
 $('voice-disconnect').onclick = () => run(async () => { voiceAutoAttempted = true; await voiceInstance().disconnect(); render(await api('state')); });
@@ -139,4 +146,4 @@ window.addEventListener('pagehide', () => {
   voice?.closeImmediately();
   if (voice?.generation && credential) void fetch('/api/voice/leave', { method: 'POST', keepalive: true, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + credential }, body: JSON.stringify({ generation: voice.generation }) }).catch(() => {});
 });
-run(async () => { const config = await api('config'); $('modality').value = config.voiceAvailable ? 'voice' : 'text'; $('voice-config').textContent = config.voiceAvailable ? 'Voice available · ' + config.liveModel : 'Voice requires OPENAI_API_KEY on the server. Text demo is available without a key.'; });
+run(async () => { const config = await api('config'); if (config.voiceAvailable) $('modality').querySelector('option[value="voice"]').dataset.available = 'yes'; $('modality').value = 'text'; syncModeOptions(); $('voice-config').textContent = config.voiceAvailable ? 'Voice available · ' + config.liveModel : 'Voice requires OPENAI_API_KEY on the server. Text demo is available without a key.'; });

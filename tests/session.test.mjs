@@ -230,6 +230,7 @@ test('solo voice starts a speaking turn without B', async t => {
   const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
   const token = room.participants.A;
   const { data: state } = await call('join', { consent: true }, token);
+  assert.equal(state.voice.live, false);
   const common = { phase: state.phase, generation: state.voice.generation };
   await call('voice/join', common, token);
   assert.equal((await call('voice/start', { ...common, sdp: 'v=0' }, token)).status, 200);
@@ -374,10 +375,11 @@ test('voice and text use the same concise mental health support system prompt', 
   assert.match(captured[1].session.instructions, /Remain silent during speaking/);
 });
 
-test('solo voice is a live conversation: open-mic speech and replies become alternating messages', async t => {
+test('solo live voice: open-mic speech and replies become alternating messages', async t => {
   const sessions = [];
   const { call } = await fixture(t, { key: 'test-key', fetchImpl: async (url, options) => { sessions.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ session: { id: 'live_solo' }, transport: { sdp: 'v=0\r\n' } }) }; } });
-  const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
+  assert.equal((await call('create', { experience: 'duo', modality: 'live' })).status, 400);
+  const { data: room } = await call('create', { experience: 'solo', modality: 'live' });
   const token = room.participants.A;
   const { data: state } = await call('join', { consent: true }, token);
   assert.equal(state.voice.live, true);
