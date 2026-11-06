@@ -36,7 +36,9 @@ export class VoiceFeedback {
     if (this.recording && rms >= 0.015) { this.lastSound = now; this.firstSound ??= now; }
     let message = this.recording ? 'Listening… Speak into your microphone.' : 'Microphone off.';
     let warning = false;
-    if (this.recording) {
+    if (this.recording && this.live) {
+      message = this.lastSound !== null && now - this.lastSound < 1000 ? 'Listening…' : 'Microphone on · speak whenever you like.';
+    } else if (this.recording) {
       if (now - (this.lastSound ?? this.started) >= 3000) { message = 'I can’t hear you. Check your microphone, speak closer, or choose the correct input device.'; warning = true; }
       else if (this.firstSound !== null && !this.transcript.trim() && now - this.firstSound >= 3000) { message = 'Microphone sound detected, but no transcript has arrived from the AI yet. Check the connection or reconnect voice.'; warning = true; }
       else if (this.transcript.trim()) message = 'Speech received · transcript arriving below.';

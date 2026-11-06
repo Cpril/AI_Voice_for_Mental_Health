@@ -39,13 +39,16 @@ function renderVoice(s) {
   $('guide').hidden = enabled;
   $('voice-audio').hidden = !(enabled && s.actor === 'B' && voice?.connected);
   if (!enabled) return;
-  $('voice-description').textContent = s.experience === 'solo' ? 'Audio goes to OpenAI while your microphone is on. Use headphones. Review your transcript before sharing it with the AI.' : 'Both participants hear the speaker and AI. Audio goes to OpenAI while a microphone is on. Use headphones; A must keep their tab open.';
-  $('voice-role').textContent = s.experience === 'solo' ? 'Voice connects automatically. Start speaking, select Microphone off · review, then Send to AI.' : s.actor === 'A' ? 'Voice connects automatically. You host the AI connection; keep this tab open.' : 'Voice connects automatically when both participants join. Wait for participant A to host the AI connection.';
+  const live = Boolean(s.voice.live);
+  $('voice-description').textContent = live ? 'Audio goes to OpenAI while your microphone is on. Use headphones so the AI does not hear itself. What you say is added to the conversation as you speak.' : s.experience === 'solo' ? 'Audio goes to OpenAI while your microphone is on. Use headphones. Review your transcript before sharing it with the AI.' : 'Both participants hear the speaker and AI. Audio goes to OpenAI while a microphone is on. Use headphones; A must keep their tab open.';
+  $('voice-role').textContent = live ? 'Talk naturally, like a phone call. The AI replies when you pause, and you can interrupt it anytime.' : s.experience === 'solo' ? 'Voice connects automatically. Start speaking, select Microphone off · review, then Send to AI.' : s.actor === 'A' ? 'Voice connects automatically. You host the AI connection; keep this tab open.' : 'Voice connects automatically when both participants join. Wait for participant A to host the AI connection.';
   $('voice-connect').hidden = Boolean(voice?.connected || voice?.starting) || !voiceAutoAttempted;
   $('voice-connect').disabled = s.status !== 'active' || !s.voiceAvailable || voice?.connected || voice?.starting;
   $('voice-disconnect').disabled = !(voice?.connected || voice?.starting);
-  $('voice-speak').disabled = s.status !== 'active' || s.busy || !voice?.ready || Boolean(s.voice.turn);
+  $('voice-speak').textContent = live ? (voice?.liveMuted ? 'Unmute microphone' : 'Mute microphone') : 'Start my speaking turn';
+  $('voice-speak').disabled = s.status !== 'active' || (!live && s.busy) || !voice?.ready || Boolean(s.voice.turn);
   const mine = s.voice.turn?.speaker === actor;
+  $('voice-finish').hidden = live;
   $('voice-finish').disabled = !(mine && s.voice.turn.recording);
   $('voice-review').hidden = !(mine && !s.voice.turn.recording);
   if (draftTurn !== s.voice.turn?.id) { draftTurn = s.voice.turn?.id; draftEdited = false; }
@@ -77,7 +80,8 @@ function render(s) {
     $('send').textContent = mine ? 'Send transcript to AI' : 'Send to AI';
     $('send').disabled = sending || s.status !== 'active' || s.busy || !s.voice.connected || !mine || s.voice.turn.recording;
     $('send').textContent = 'Send to AI';
-  } else $('send').textContent = 'Send';
+    $('send').hidden = Boolean(s.voice.live);
+  } else { $('send').textContent = 'Send'; $('send').hidden = false; }
   $('session-summary').hidden = !s.summaryStatus;
   $('summary-text').textContent = s.summaryStatus === 'generating' ? 'Preparing your discussion summary…' : s.finalSummary || '';
   $('pause').textContent = s.status === 'paused' ? 'Resume' : 'Pause';
@@ -116,7 +120,10 @@ if (credential) run(async () => { const s = await api('state'); actor = s.actor;
 
 $('voice-connect').onclick = () => run(connectVoice);
 $('voice-disconnect').onclick = () => run(async () => { voiceAutoAttempted = true; await voiceInstance().disconnect(); render(await api('state')); });
-$('voice-speak').onclick = () => run(async () => { render(await voiceInstance().begin()); });
+$('voice-speak').onclick = () => run(async () => {
+  if (state.voice.live) { voiceInstance().toggleLiveMute(); render(state); return; }
+  render(await voiceInstance().begin());
+});
 $('voice-finish').onclick = () => run(async () => { render(await voiceInstance().finish()); });
 $('voice-transcript').oninput = () => { draftEdited = true; };
 for (const action of ['discard']) $('voice-' + action).onclick = () => run(async () => {

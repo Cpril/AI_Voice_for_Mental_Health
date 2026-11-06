@@ -373,3 +373,25 @@ test('voice and text use the same concise mental health support system prompt', 
   assert.match(captured[1].session.instructions, /two participants A and B/);
   assert.match(captured[1].session.instructions, /Remain silent during speaking/);
 });
+
+test('solo voice is a live conversation: open-mic speech and replies become alternating messages', async t => {
+  const sessions = [];
+  const { call } = await fixture(t, { key: 'test-key', fetchImpl: async (url, options) => { sessions.push(JSON.parse(options.body)); return { ok: true, json: async () => ({ session: { id: 'live_solo' }, transport: { sdp: 'v=0\r\n' } }) }; } });
+  const { data: room } = await call('create', { experience: 'solo', modality: 'voice' });
+  const token = room.participants.A;
+  const { data: state } = await call('join', { consent: true }, token);
+  assert.equal(state.voice.live, true);
+  const common = { phase: state.phase, generation: state.voice.generation };
+  await call('voice/join', common, token);
+  await call('voice/start', { ...common, sdp: 'v=0' }, token);
+  assert.match(sessions[0].session.instructions, /Interruption policy/);
+  assert.doesNotMatch(sessions[0].session.instructions, /Remain silent during speaking/);
+  const send = (id, type, delta) => call('voice/event', { ...common, sessionId: 'live_solo', event: { type, event_id: id, delta, start_ms: 1, end_ms: 2 } }, token);
+  await send('o1', 'session.output_transcript.delta', 'Hi there.');
+  await send('i1', 'session.input_transcript.delta', 'My teammate');
+  await send('i2', 'session.input_transcript.delta', ' was late again.');
+  await send('o2', 'session.output_transcript.delta', 'That sounds frustrating.');
+  await send('i3', 'session.input_transcript.delta', 'Yes.');
+  const messages = (await call('state', undefined, token)).data.events.filter(e => e.type === 'message' && e.text).slice(-4).map(e => [e.actor, e.text]);
+  assert.deepEqual(messages, [['Guide', 'Hi there.'], ['A', 'My teammate was late again.'], ['Guide', 'That sounds frustrating.'], ['A', 'Yes.']]);
+});
